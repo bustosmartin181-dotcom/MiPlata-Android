@@ -20,35 +20,45 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Ensure Gradle Wrapper
+      - name: Install Android SDK
         run: |
-          if [ ! -f "./gradlew" ]; then
-            echo "No gradlew — generando wrapper..."
-            gradle wrapper --gradle-version 8.10.2 || true
-          fi
-          if [ ! -f "./gradlew" ]; then
-            # Fallback: descargar wrapper mínimo vía gradle instalado en el runner
-            curl -sL -o /tmp/gradle-8.10.2-bin.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
-            sudo unzip -q /tmp/gradle-8.10.2-bin.zip -d /opt
-            /opt/gradle-8.10.2/bin/gradle wrapper --gradle-version 8.10.2
-          fi
-          chmod +x ./gradlew
-          ls -la gradlew gradle/wrapper/ || true
+          set -e
+          ANDROID_ROOT=$HOME/android-sdk
+          mkdir -p "$ANDROID_ROOT/cmdline-tools"
+          cd /tmp
+          curl -fsSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q cmdtools.zip
+          rm -rf "$ANDROID_ROOT/cmdline-tools/latest"
+          mkdir -p "$ANDROID_ROOT/cmdline-tools/latest"
+          mv cmdline-tools/* "$ANDROID_ROOT/cmdline-tools/latest/"
+          echo "ANDROID_HOME=$ANDROID_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_ROOT" >> $GITHUB_ENV
+          echo "$ANDROID_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_ROOT/platform-tools" >> $GITHUB_PATH
 
-      - name: Create local.properties
+      - name: Install SDK packages
+        run: |
+          set -e
+          yes | sdkmanager --sdk_root=$ANDROID_HOME \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" || true
+          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
+
+      - name: local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Make gradlew executable
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "No hay gradlew"
+            exit 1
+          fi
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace --no-daemon
-
-      - name: List APK outputs
-        run: find app/build/outputs -name "*.apk" -type f || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -56,3 +66,4 @@ jobs:
           name: MiPlata-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          
