@@ -161,6 +161,8 @@ interface GastoDao {
     @Update suspend fun update(g: Gasto)
     @Query("DELETE FROM gasto WHERE id = :id")
     suspend fun delete(id: Long)
+    @Query("DELETE FROM gasto")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -171,6 +173,7 @@ interface GastoImportanteDao {
     @Update suspend fun update(g: GastoImportante)
     @Query("DELETE FROM gasto_importante WHERE id = :id") suspend fun delete(id: Long)
     @Query("SELECT COUNT(*) FROM gasto_importante") suspend fun count(): Int
+    @Query("DELETE FROM gasto_importante") suspend fun deleteAll()
 }
 
 @Dao
@@ -180,6 +183,7 @@ interface IngresoDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(i: Ingreso): Long
     @Update suspend fun update(i: Ingreso)
     @Query("DELETE FROM ingreso WHERE id = :id") suspend fun delete(id: Long)
+    @Query("DELETE FROM ingreso") suspend fun deleteAll()
 }
 
 @Dao
@@ -189,6 +193,7 @@ interface CuentaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(c: Cuenta): Long
     @Update suspend fun update(c: Cuenta)
     @Query("DELETE FROM cuenta WHERE id = :id") suspend fun delete(id: Long)
+    @Query("DELETE FROM cuenta") suspend fun deleteAll()
 }
 
 @Dao
@@ -198,6 +203,7 @@ interface MetaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insert(m: Meta): Long
     @Update suspend fun update(m: Meta)
     @Query("DELETE FROM meta WHERE id = :id") suspend fun delete(id: Long)
+    @Query("DELETE FROM meta") suspend fun deleteAll()
 }
 
 @Dao
@@ -459,6 +465,124 @@ class Repository(private val db: AppDatabase) {
             Settings()
         }
         // Keep recurring importantes; archive handled in ViewModel
+    }
+
+
+    suspend fun importBackupJson(json: String): String {
+        val root = org.json.JSONObject(json)
+        val nombre = root.optString("nombre", "")
+        val sueldo = root.optDouble("sueldo", 0.0)
+        val previo = root.optDouble("previo", 0.0)
+        val start = root.optString("start", "2026-10-06")
+        val end = root.optString("end", "2026-11-04")
+        val objetivo = if (root.has("objetivo") && !root.isNull("objetivo")) root.optDouble("objetivo") else null
+        val tema = root.optString("tema", "auto").ifBlank { "auto" }
+
+        db.gasto().deleteAll()
+        db.gastoImportante().deleteAll()
+        db.ingreso().deleteAll()
+        db.meta().deleteAll()
+        db.cuenta().deleteAll()
+
+        db.settings().save(
+            Settings(
+                nombre = nombre.ifBlank { "vos" },
+                sueldo = sueldo,
+                saldoPrevio = previo,
+                fechaInicio = start,
+                fechaFin = end,
+                objetivoPorDia = objetivo,
+                tema = tema,
+                onboardingHecho = true,
+                ultimoBackup = java.time.LocalDate.now().toString()
+            )
+        )
+
+        val items = root.optJSONArray("items")
+        if (items != null) {
+            for (i in 0 until items.length()) {
+                val o = items.getJSONObject(i)
+                val nombreItem = o.optString("n", "").trim()
+                if (nombreItem.isEmpty()) continue
+                db.gastoImportante().insert(
+                    GastoImportante(
+                        concepto = nombreItem,
+                        monto = o.optDouble("a", 0.0),
+                        pagado = o.optBoolean("p", false),
+                        montoVariable = o.optBoolean("v", false),
+                        repetirMesSiguiente = o.optBoolean("f", false).not() && o.optBoolean("v", false),
+                        orden = i
+                    )
+                )
+            }
+        }
+
+        val spent = root.optJSONArray("spent")
+        var nSpent = 0
+        if (spent != null) {
+            for (i in 0 until spent.length()) {
+                val o = spent.getJSONObject(i)
+                val amt = o.optDouble("amt", 0.0)
+                // negativos = reintegros / ajustes; los cargamos igual
+                db.gasto().insert(
+                    Gasto(
+                        fecha = o.optString("date", ""),
+                        monto = amt,
+                        detalle = o.optString("note", ""),
+                        categoria = o.optString("cat", "Otro").ifBlank { "Otro" }
+                    )
+                )
+                nSpent++
+            }
+        }
+
+        val ingresos = root.optJSONArray("ingresos")
+        if (ingresos != null) {
+            for (i in 0 until ingresos.length()) {
+                val o = ingresos.getJSONObject(i)
+                db.ingreso().insert(
+                    Ingreso(
+                        concepto = o.optString("cat", "Ingreso"),
+                        monto = o.optDouble("a", 0.0),
+                        categoria = o.optString("cat", "Otro ingreso"),
+                        orden = i
+                    )
+                )
+            }
+        } else if (sueldo > 0) {
+            db.ingreso().insert(Ingreso(concepto = "Sueldo", monto = sueldo, categoria = "Sueldo"))
+        }
+
+        val metas = root.optJSONArray("metas")
+        if (metas != null) {
+            for (i in 0 until metas.length()) {
+                val o = metas.getJSONObject(i)
+                db.meta().insert(
+                    Meta(
+                        nombre = o.optString("n", "Meta"),
+                        montoObjetivo = o.optDouble("t", 0.0),
+                        montoJuntado = o.optDouble("g0", 0.0),
+                        fechaObjetivo = o.optString("f", "")
+                    )
+                )
+            }
+        }
+
+        val cuentas = root.optJSONArray("cuentas")
+        if (cuentas != null) {
+            for (i in 0 until cuentas.length()) {
+                val o = cuentas.getJSONObject(i)
+                db.cuenta().insert(
+                    Cuenta(
+                        nombre = o.optString("n", "Cuenta"),
+                        saldo = o.optDouble("m", 0.0),
+                        orden = i
+                    )
+                )
+            }
+        }
+
+        return "Importados $nSpent gastos diarios y ${items?.length() ?: 0} importantes."
     }
 
     fun exportCsvDias(dias: List<DiaUi>): String {

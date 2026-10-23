@@ -63,6 +63,14 @@ class MainViewModel(private val repo: Repository) : ViewModel() {
     fun updateMeta(m: Meta) = viewModelScope.launch { repo.updateMeta(m) }
     fun updateCuenta(c: Cuenta) = viewModelScope.launch { repo.updateCuenta(c) }
     fun setDiaCerrado(fecha: String, cerrado: Boolean) = viewModelScope.launch { repo.setDiaCerrado(fecha, cerrado) }
+    fun importBackup(json: String, onResult: (String) -> Unit) = viewModelScope.launch {
+        try {
+            val msg = repo.importBackupJson(json)
+            onResult(msg)
+        } catch (e: Exception) {
+            onResult("Error al importar: ${e.message}")
+        }
+    }
 
     class Factory(private val repo: Repository) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")

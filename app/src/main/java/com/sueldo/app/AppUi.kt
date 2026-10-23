@@ -67,8 +67,21 @@ fun MiPlataTheme(tema: String = "auto", content: @Composable () -> Unit) {
         "claro" -> false
         else -> sysDark
     }
-    val colors = if (dark) darkColorScheme(primary = TealL, secondary = Color(0xFFF59E0B), background = Color(0xFF0F172A), surface = Color(0xFF1E293B))
-    else lightColorScheme(primary = Teal, secondary = Color(0xFFF59E0B), background = Color(0xFFF8FAFC), surface = Color.White)
+    val colors = if (dark) darkColorScheme(
+        primary = Color(0xFF2DD4BF),
+        secondary = Color(0xFFFBBF24),
+        tertiary = Color(0xFFA78BFA),
+        background = Color(0xFF0B1220),
+        surface = Color(0xFF141C2E),
+        surfaceVariant = Color(0xFF1E293B)
+    ) else lightColorScheme(
+        primary = Color(0xFF0D9488),
+        secondary = Color(0xFFD97706),
+        tertiary = Color(0xFF7C3AED),
+        background = Color(0xFFF4F7FB),
+        surface = Color.White,
+        surfaceVariant = Color(0xFFE8EEF5)
+    )
     MaterialTheme(colorScheme = colors, content = content)
 }
 
@@ -161,25 +174,148 @@ fun OnboardingScreen(onDone: (String) -> Unit) {
     var page by remember { mutableStateOf(0) }
     var nombre by remember { mutableStateOf("") }
     val pages = listOf(
-        "Así funciona" to "Anotás lo que gastás. Lo que sobra pasa a mañana. Si te pasás, se descuenta.",
-        "Tu plata, tu decisión" to "Ves cuánto te queda hoy, en el periodo y cómo vas día a día.",
-        "De dónde viene tu plata" to "Cargás ingresos y gastos importantes. La app calcula tu día a día.",
-        "Tu nombre" to "¿Cómo querés que te digamos?"
+        Triple(
+            Icons.Filled.AccountBalanceWallet,
+            "Tu plata, bajo control",
+            "Anotás lo que gastás. Lo que sobra pasa a mañana. Si te pasás, se descuenta del día siguiente."
+        ),
+        Triple(
+            Icons.Filled.Insights,
+            "Ves el día y el mes",
+            "Semáforo del día, racha, gastos importantes y cuánto te queda del periodo — todo en un vistazo."
+        ),
+        Triple(
+            Icons.Filled.Flag,
+            "Planificá con calma",
+            "Ingresos, pagar al cobrar, cuotas y metas. La app calcula tu base diaria por vos."
+        ),
+        Triple(
+            Icons.Filled.Person,
+            "¿Cómo te llamamos?",
+            "Así personalizamos tu pantalla de hoy."
+        )
     )
-    Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.SpaceBetween) {
-        Column {
-            Text(pages[page].first, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(12.dp))
-            Text(pages[page].second, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (page == 3) {
-                Spacer(Modifier.height(24.dp))
-                OutlinedTextField(value = nombre, onValueChange = { nombre = it }, label = { Text("Nombre") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    val (icon, title, body) = pages[page]
+    val accent = listOf(
+        Color(0xFF0F766E),
+        Color(0xFF0369A1),
+        Color(0xFF7C3AED),
+        Color(0xFF0F766E)
+    )[page]
+
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        // Fondo decorativo
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(320.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(accent.copy(alpha = 0.2f), MaterialTheme.colorScheme.background)
+                    )
+                )
+        )
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(28.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                pages.indices.forEach { i ->
+                    Box(
+                        Modifier
+                            .height(4.dp)
+                            .weight(1f)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(if (i <= page) accent else MaterialTheme.colorScheme.surfaceVariant)
+                    )
+                }
+            }
+
+            Column(
+                Modifier.fillMaxWidth().weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                // Ilustración
+                Box(contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .size(160.dp)
+                            .clip(CircleShape)
+                            .background(accent.copy(alpha = 0.12f))
+                    )
+                    Box(
+                        Modifier
+                            .size(120.dp)
+                            .clip(CircleShape)
+                            .background(accent.copy(alpha = 0.2f))
+                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = accent,
+                        shadowElevation = 8.dp,
+                        modifier = Modifier.size(88.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                            Icon(icon, null, Modifier.size(44.dp), tint = Color.White)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(36.dp))
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    body,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                if (page == 3) {
+                    Spacer(Modifier.height(28.dp))
+                    OutlinedTextField(
+                        value = nombre,
+                        onValueChange = { nombre = it },
+                        label = { Text("Tu nombre") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
+                    )
+                }
+            }
+
+            Column {
+                Button(
+                    onClick = {
+                        if (page < 3) page++ else onDone(nombre.ifBlank { "vos" })
+                    },
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = accent)
+                ) {
+                    Text(
+                        if (page < 3) "Siguiente" else "Empezar con Mi Plata",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                if (page > 0 && page < 3) {
+                    TextButton(
+                        onClick = { page-- },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Atrás") }
+                }
             }
         }
-        Button(
-            onClick = { if (page < 3) page++ else onDone(nombre.ifBlank { "vos" }) },
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text(if (page < 3) "Siguiente" else "Empezar") }
     }
 }
 
@@ -719,6 +855,22 @@ fun AjustesScreen(settings: Settings, vm: MainViewModel) {
     val gastos by vm.gastos.collectAsState()
     val importantes by vm.importantes.collectAsState()
 
+    val pickJson = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            val textJson = ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            if (textJson.isNullOrBlank()) {
+                msg = "El archivo está vacío"
+            } else {
+                vm.importBackup(textJson) { result -> msg = result }
+            }
+        } catch (e: Exception) {
+            msg = "No se pudo leer el archivo: ${e.message}"
+        }
+    }
+
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Ajustes", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) }
 
@@ -804,6 +956,20 @@ fun AjustesScreen(settings: Settings, vm: MainViewModel) {
                     vm.saveSettings(settings.copy(ultimoBackup = LocalDate.now().toString()))
                     msg = "Copia marcada (${LocalDate.now()})"
                 }, modifier = Modifier.fillMaxWidth()) { Text("Guardar copia ahora") }
+                Button(
+                    onClick = { pickJson.launch("application/json") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E))
+                ) {
+                    Icon(Icons.Default.UploadFile, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Restaurar copia JSON")
+                }
+                Text(
+                    "Elegí tu archivo mi-plata-copia.json de la app anterior.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 OutlinedButton(onClick = {
                     ExportCsv.share(ctx, "mi_plata_dias", ExportCsv.diasCsv(dias))
                     msg = "Exportando días (CSV)…"
