@@ -72,7 +72,6 @@ jobs:
           android {
               namespace = "com.sueldo.app"
               compileSdk = 35
-
               defaultConfig {
                   applicationId = "com.miplata.app"
                   minSdk = 26
@@ -80,23 +79,15 @@ jobs:
                   versionCode = 1
                   versionName = "1.0.0"
               }
-
-              buildTypes {
-                  release { isMinifyEnabled = false }
-              }
-
+              buildTypes { release { isMinifyEnabled = false } }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
               }
-
               kotlinOptions { jvmTarget = "17" }
               buildFeatures { compose = true }
-
               packaging {
-                  resources {
-                      excludes += "/META-INF/{AL2.0,LGPL2.1}"
-                  }
+                  resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
               }
           }
 
@@ -122,8 +113,30 @@ jobs:
           }
           EOT
 
-          # Icono que falta (mipmap lo pide)
-          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/values app/src/main/res/drawable app/src/main/res/xml
+
+          # FIX TEMA: Manifest pide Theme.MiPlata
+          cat > app/src/main/res/values/themes.xml << 'EOT'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.MiPlata" parent="android:Theme.Material.Light.NoActionBar" />
+          </resources>
+          EOT
+
+          cat > app/src/main/res/values/colors.xml << 'EOT'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#0F766E</color>
+          </resources>
+          EOT
+
+          cat > app/src/main/res/values/strings.xml << 'EOT'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Mi Plata</string>
+          </resources>
+          EOT
+
           cat > app/src/main/res/drawable/ic_launcher_foreground.xml << 'EOT'
           <?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -136,15 +149,15 @@ jobs:
           </vector>
           EOT
 
-          mkdir -p app/src/main/res/values
-          cat > app/src/main/res/values/colors.xml << 'EOT'
+          cat > app/src/main/res/xml/file_paths.xml << 'EOT'
           <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <color name="ic_launcher_background">#0F766E</color>
-          </resources>
+          <paths>
+              <cache-path name="cache" path="." />
+              <files-path name="files" path="." />
+              <external-files-path name="external" path="." />
+          </paths>
           EOT
 
-          # Wrapper oficial
           curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
           sudo unzip -q -o /tmp/gradle.zip -d /opt
           /opt/gradle-8.10.2/bin/gradle wrapper --gradle-version 8.10.2
