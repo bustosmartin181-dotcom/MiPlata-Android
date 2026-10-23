@@ -48,8 +48,7 @@ jobs:
       - name: local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-      # --- Auto-reparar Gradle / Compose (no depende de cómo subiste los archivos) ---
-      - name: Fix project Gradle files
+      - name: Fix project files for a clean build
         run: |
           set -e
 
@@ -83,9 +82,7 @@ jobs:
               }
 
               buildTypes {
-                  release {
-                      isMinifyEnabled = false
-                  }
+                  release { isMinifyEnabled = false }
               }
 
               compileOptions {
@@ -93,13 +90,8 @@ jobs:
                   targetCompatibility = JavaVersion.VERSION_17
               }
 
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
-
-              buildFeatures {
-                  compose = true
-              }
+              kotlinOptions { jvmTarget = "17" }
+              buildFeatures { compose = true }
 
               packaging {
                   resources {
@@ -125,8 +117,31 @@ jobs:
               implementation("androidx.room:room-runtime:2.6.1")
               implementation("androidx.room:room-ktx:2.6.1")
               ksp("androidx.room:room-compiler:2.6.1")
+              implementation("androidx.work:work-runtime-ktx:2.9.1")
               debugImplementation("androidx.compose.ui:ui-tooling")
           }
+          EOT
+
+          # Icono que falta (mipmap lo pide)
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_launcher_foreground.xml << 'EOT'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M30,54 L48,70 L78,38"
+                  android:strokeWidth="8" android:strokeColor="#FFFFFF"
+                  android:strokeLineCap="round" android:strokeLineJoin="round"/>
+          </vector>
+          EOT
+
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/colors.xml << 'EOT'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#0F766E</color>
+          </resources>
           EOT
 
           # Wrapper oficial
