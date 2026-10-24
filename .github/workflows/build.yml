@@ -39,10 +39,7 @@ jobs:
       - name: Install SDK packages
         run: |
           set -e
-          yes | sdkmanager --sdk_root=$ANDROID_HOME \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" || true
+          yes | sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-35" "build-tools;35.0.0" || true
           yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
 
       - name: local.properties
@@ -51,18 +48,18 @@ jobs:
       - name: Fix project files for a clean build
         run: |
           set -e
+          python3 << 'PY'
+          from pathlib import Path
 
-          cat > build.gradle.kts << 'EOT'
-          plugins {
+          Path("build.gradle.kts").write_text("""plugins {
               id("com.android.application") version "8.7.2" apply false
               id("org.jetbrains.kotlin.android") version "2.0.21" apply false
               id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
               id("com.google.devtools.ksp") version "2.0.21-1.0.25" apply false
           }
-          EOT
+          """)
 
-          cat > app/build.gradle.kts << 'EOT'
-          plugins {
+          Path("app/build.gradle.kts").write_text("""plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
               id("org.jetbrains.kotlin.plugin.compose")
@@ -111,34 +108,32 @@ jobs:
               implementation("androidx.work:work-runtime-ktx:2.9.1")
               debugImplementation("androidx.compose.ui:ui-tooling")
           }
-          EOT
+          """)
 
-          mkdir -p app/src/main/res/values app/src/main/res/drawable app/src/main/res/xml
+          def clean(s):
+              return s.replace("          <", "<").replace("\n          ", "\n")
 
-          # FIX TEMA: Manifest pide Theme.MiPlata
-          cat > app/src/main/res/values/themes.xml << 'EOT'
-          <?xml version="1.0" encoding="utf-8"?>
+          values = Path("app/src/main/res/values")
+          values.mkdir(parents=True, exist_ok=True)
+          (values / "themes.xml").write_text(clean("""<?xml version="1.0" encoding="utf-8"?>
           <resources>
               <style name="Theme.MiPlata" parent="android:Theme.Material.Light.NoActionBar" />
           </resources>
-          EOT
-
-          cat > app/src/main/res/values/colors.xml << 'EOT'
-          <?xml version="1.0" encoding="utf-8"?>
+          """))
+          (values / "colors.xml").write_text(clean("""<?xml version="1.0" encoding="utf-8"?>
           <resources>
               <color name="ic_launcher_background">#0F766E</color>
           </resources>
-          EOT
-
-          cat > app/src/main/res/values/strings.xml << 'EOT'
-          <?xml version="1.0" encoding="utf-8"?>
+          """))
+          (values / "strings.xml").write_text(clean("""<?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">Mi Plata</string>
           </resources>
-          EOT
+          """))
 
-          cat > app/src/main/res/drawable/ic_launcher_foreground.xml << 'EOT'
-          <?xml version="1.0" encoding="utf-8"?>
+          drawable = Path("app/src/main/res/drawable")
+          drawable.mkdir(parents=True, exist_ok=True)
+          (drawable / "ic_launcher_foreground.xml").write_text(clean("""<?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="108dp" android:height="108dp"
               android:viewportWidth="108" android:viewportHeight="108">
@@ -147,16 +142,30 @@ jobs:
                   android:strokeWidth="8" android:strokeColor="#FFFFFF"
                   android:strokeLineCap="round" android:strokeLineJoin="round"/>
           </vector>
-          EOT
+          """))
 
-          cat > app/src/main/res/xml/file_paths.xml << 'EOT'
-          <?xml version="1.0" encoding="utf-8"?>
+          xml = Path("app/src/main/res/xml")
+          xml.mkdir(parents=True, exist_ok=True)
+          (xml / "file_paths.xml").write_text(clean("""<?xml version="1.0" encoding="utf-8"?>
           <paths>
               <cache-path name="cache" path="." />
               <files-path name="files" path="." />
               <external-files-path name="external" path="." />
           </paths>
-          EOT
+          """))
+
+          mipmap = Path("app/src/main/res/mipmap-anydpi-v26")
+          if mipmap.exists():
+              for name in ("ic_launcher.xml", "ic_launcher_round.xml"):
+                  (mipmap / name).write_text(clean("""<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          """))
+
+          print("Resources fixed")
+          PY
 
           curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
           sudo unzip -q -o /tmp/gradle.zip -d /opt
@@ -173,4 +182,3 @@ jobs:
           name: MiPlata-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          
