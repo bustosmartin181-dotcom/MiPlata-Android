@@ -58,11 +58,17 @@ class MainViewModel(private val repo: Repository) : ViewModel() {
     fun addGasto(g: Gasto) = viewModelScope.launch { repo.addGasto(g) }
     fun deleteGasto(id: Long) = viewModelScope.launch { repo.deleteGasto(id) }
     fun toggleImportante(g: GastoImportante) = viewModelScope.launch { repo.updateImportante(g.copy(pagado = !g.pagado)) }
+    fun saveImportante(g: GastoImportante) = viewModelScope.launch { repo.updateImportante(g) }
+    fun addImportante(g: GastoImportante) = viewModelScope.launch { repo.addImportante(g) }
     fun addIngreso(i: Ingreso) = viewModelScope.launch { repo.addIngreso(i) }
+    fun updateIngreso(i: Ingreso) = viewModelScope.launch { repo.updateIngreso(i) }
     fun addMeta(m: Meta) = viewModelScope.launch { repo.addMeta(m) }
     fun updateMeta(m: Meta) = viewModelScope.launch { repo.updateMeta(m) }
     fun updateCuenta(c: Cuenta) = viewModelScope.launch { repo.updateCuenta(c) }
     fun setDiaCerrado(fecha: String, cerrado: Boolean) = viewModelScope.launch { repo.setDiaCerrado(fecha, cerrado) }
+    fun exportBackup(onResult: (String) -> Unit) = viewModelScope.launch {
+        try { onResult(repo.exportBackupJson()) } catch (e: Exception) { onResult("ERROR:${e.message}") }
+    }
     fun importBackup(json: String, onResult: (String) -> Unit) = viewModelScope.launch {
         try {
             val msg = repo.importBackupJson(json)

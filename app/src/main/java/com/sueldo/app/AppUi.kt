@@ -99,10 +99,30 @@ fun AppNav(vm: MainViewModel) {
     val cuentas by vm.cuentas.collectAsState()
     val metas by vm.metas.collectAsState()
 
-    // PIN gate
+    // PIN gate + bloqueo al volver (1 minuto en segundo plano)
     var unlocked by remember { mutableStateOf(settings.pin.isBlank() || !settings.pinAlAbrir) }
+    var lastActive by remember { mutableStateOf(System.currentTimeMillis()) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                    lastActive = System.currentTimeMillis()
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    val elapsed = System.currentTimeMillis() - lastActive
+                    if (settings.pin.isNotBlank() && settings.pinAlAbrir && elapsed > 60_000) {
+                        unlocked = false
+                    }
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     if (!unlocked && settings.pin.isNotBlank() && settings.pinAlAbrir) {
-        PinScreen(settings.pin) { unlocked = true }
+        PinScreen(settings.pin) { unlocked = true; lastActive = System.currentTimeMillis() }
         return
     }
 
@@ -164,7 +184,7 @@ fun PinScreen(pin: String, onOk: () -> Unit) {
         if (error) Text("PIN incorrecto", color = MaterialTheme.colorScheme.error)
         Spacer(Modifier.height(16.dp))
         Button(onClick = {
-            if (input == pin) onOk() else error = true
+            if (PinHash.matches(pin, input)) onOk() else error = true
         }, modifier = Modifier.fillMaxWidth()) { Text("Entrar") }
     }
 }
@@ -737,6 +757,8 @@ fun DiasScreen(dias: List<DiaUi>, settings: Settings, vm: MainViewModel) {
     }
 }
 
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlanScreen(
     importantes: List<GastoImportante>,
@@ -751,16 +773,23 @@ fun PlanScreen(
     val pagado = importantes.filter { it.pagado }.sumOf { it.monto }
     val falta = totalImp - pagado
     val disponible = totalIng + settings.saldoPrevio - totalImp
+    var editImp by remember { mutableStateOf<GastoImportante?>(null) }
+    var nuevoImp by remember { mutableStateOf(false) }
+    var editIng by remember { mutableStateOf<Ingreso?>(null) }
 
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("Plan", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("Tocá un ítem para editarlo", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         item {
-            Card(shape = RoundedCornerShape(16.dp)) {
-                Column(Modifier.padding(16.dp)) {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
+            ) {
+                Column(Modifier.padding(18.dp)) {
                     Text("Resumen del mes", fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(10.dp))
                     RowLine("Ingresos", money(totalIng, hide))
                     RowLine("Gastos importantes", money(totalImp, hide))
                     RowLine("Falta pagar", money(falta, hide), if (falta == 0.0) Ok else Bad)
@@ -770,7 +799,11 @@ fun PlanScreen(
         }
         item { Text("Ingresos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
         items(ingresos, key = { it.id }) { i ->
-            Card(shape = RoundedCornerShape(12.dp)) {
+            Card(
+                onClick = { editIng = i },
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(i.concepto, fontWeight = FontWeight.SemiBold)
@@ -781,16 +814,28 @@ fun PlanScreen(
             }
         }
         item {
-            OutlinedButton(onClick = {
-                vm.addIngreso(Ingreso(concepto = "Nuevo ingreso", monto = 0.0, categoria = "Otro ingreso"))
-            }, modifier = Modifier.fillMaxWidth()) { Text("+ Agregar ingreso") }
+            OutlinedButton(
+                onClick = {
+                    editIng = Ingreso(concepto = "", monto = 0.0, categoria = "Otro ingreso")
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("+ Agregar ingreso") }
         }
         item { Text("Pagar al cobrar", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
         items(importantes, key = { it.id }) { g ->
-            Card(shape = RoundedCornerShape(12.dp)) {
+            Card(
+                onClick = { editImp = g },
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { vm.toggleImportante(g) }) {
-                        Icon(if (g.pagado) Icons.Filled.CheckCircle else Icons.Outlined.Circle, null, tint = if (g.pagado) Ok else MaterialTheme.colorScheme.outline)
+                        Icon(
+                            if (g.pagado) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
+                            null,
+                            tint = if (g.pagado) Ok else MaterialTheme.colorScheme.outline
+                        )
                     }
                     Column(Modifier.weight(1f)) {
                         Text(g.concepto, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -802,43 +847,147 @@ fun PlanScreen(
                         }
                     }
                     Surface(shape = RoundedCornerShape(50), color = if (g.pagado) OkBg else BadBg) {
-                        Text(if (g.pagado) "Pagado" else "Pendiente", Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = if (g.pagado) Color(0xFF065F46) else Color(0xFF991B1B), style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            if (g.pagado) "Pagado" else "Pendiente",
+                            Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            color = if (g.pagado) Color(0xFF065F46) else Color(0xFF991B1B),
+                            style = MaterialTheme.typography.labelMedium
+                        )
                     }
                 }
             }
         }
+        item {
+            OutlinedButton(
+                onClick = { nuevoImp = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("+ Agregar gasto importante") }
+        }
         item { Text("Metas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
         items(metas, key = { it.id }) { m ->
-            Card(shape = RoundedCornerShape(12.dp)) {
+            val prog = if (m.montoObjetivo > 0) (m.montoJuntado / m.montoObjetivo).toFloat().coerceIn(0f, 1f) else 0f
+            Card(shape = RoundedCornerShape(16.dp)) {
                 Column(Modifier.padding(14.dp)) {
                     Text(m.nombre, fontWeight = FontWeight.SemiBold)
-                    Text("${money(m.montoJuntado, hide)} de ${money(m.montoObjetivo, hide)}", style = MaterialTheme.typography.bodyMedium)
-                    LinearProgressIndicator(
-                        progress = { (m.montoJuntado / m.montoObjetivo.coerceAtLeast(1.0)).toFloat().coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                    )
-                    if (m.fechaObjetivo.isNotBlank()) Text("Objetivo: ${m.fechaObjetivo}", style = MaterialTheme.typography.bodySmall)
-                    val meses = 3.0
-                    val aporte = ((m.montoObjetivo - m.montoJuntado) / meses).coerceAtLeast(0.0)
-                    Text("Aporte sugerido: ${money(aporte, hide)}/mes", style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = { vm.updateMeta(m.copy(montoJuntado = m.montoJuntado + aporte)) }) { Text("Aportar") }
+                    LinearProgressIndicator(progress = { prog }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                    Text("${money(m.montoJuntado, hide)} / ${money(m.montoObjetivo, hide)}", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
         item {
             OutlinedButton(onClick = {
-                vm.addMeta(Meta(nombre = "Nueva meta", montoObjetivo = 100000.0, fechaObjetivo = LocalDate.now().plusMonths(3).toString()))
-            }, modifier = Modifier.fillMaxWidth()) { Text("+ Nueva meta") }
-            Spacer(Modifier.height(24.dp))
+                vm.addMeta(Meta(nombre = "Nueva meta", montoObjetivo = 100000.0, montoJuntado = 0.0))
+            }, modifier = Modifier.fillMaxWidth()) { Text("+ Agregar meta") }
         }
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+
+    if (nuevoImp || editImp != null) {
+        val base = editImp ?: GastoImportante(concepto = "", monto = 0.0)
+        EditImportanteSheet(
+            inicial = base,
+            onDismiss = { nuevoImp = false; editImp = null },
+            onSave = { g ->
+                if (g.id == 0L) vm.addImportante(g) else vm.saveImportante(g)
+                nuevoImp = false
+                editImp = null
+            }
+        )
+    }
+
+    editIng?.let { ing ->
+        var c by remember(ing) { mutableStateOf(ing.concepto) }
+        var m by remember(ing) { mutableStateOf(if (ing.monto > 0) ing.monto.toLong().toString() else "") }
+        AlertDialog(
+            onDismissRequest = { editIng = null },
+            title = { Text(if (ing.id == 0L) "Nuevo ingreso" else "Editar ingreso") },
+            text = {
+                Column {
+                    OutlinedTextField(c, { c = it }, label = { Text("Concepto") }, singleLine = true)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(m, { m = it.filter(Char::isDigit) }, label = { Text("Monto") }, prefix = { Text("$ ") }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val montoV = m.toDoubleOrNull() ?: 0.0
+                    if (c.isNotBlank()) {
+                        if (ing.id == 0L) vm.addIngreso(Ingreso(concepto = c, monto = montoV, categoria = c))
+                        else vm.updateIngreso(ing.copy(concepto = c, monto = montoV, categoria = c))
+                        editIng = null
+                    }
+                }) { Text("Guardar") }
+            },
+            dismissButton = { TextButton(onClick = { editIng = null }) { Text("Cancelar") } }
+        )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RowLine(label: String, value: String, color: Color = Color.Unspecified) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontWeight = FontWeight.SemiBold, color = if (color == Color.Unspecified) MaterialTheme.colorScheme.onSurface else color)
+fun EditImportanteSheet(
+    inicial: GastoImportante,
+    onDismiss: () -> Unit,
+    onSave: (GastoImportante) -> Unit
+) {
+    var concepto by remember(inicial) { mutableStateOf(inicial.concepto) }
+    var monto by remember(inicial) { mutableStateOf(if (inicial.monto > 0) inicial.monto.toLong().toString() else "") }
+    var pagado by remember(inicial) { mutableStateOf(inicial.pagado) }
+    var fijo by remember(inicial) { mutableStateOf(inicial.repetirMesSiguiente) }
+    var variable by remember(inicial) { mutableStateOf(inicial.montoVariable) }
+    var cuotas by remember(inicial) { mutableStateOf(inicial.enCuotas) }
+    var cuotaAct by remember(inicial) { mutableStateOf(inicial.cuotaActual.toString()) }
+    var cuotaTot by remember(inicial) { mutableStateOf(inicial.cuotaTotal.toString()) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(24.dp).padding(bottom = 32.dp)) {
+            Text(if (inicial.id == 0L) "Nuevo gasto importante" else "Editar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(concepto, { concepto = it }, label = { Text("Concepto") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(monto, { monto = it.filter(Char::isDigit) }, label = { Text("Monto") }, prefix = { Text("$ ") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(pagado, { pagado = it }); Text("Pagado")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(fijo, { fijo = it }); Text("Se repite el mes siguiente")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(variable, { variable = it }); Text("Monto variable")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(cuotas, { cuotas = it }); Text("En cuotas")
+            }
+            if (cuotas) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(cuotaAct, { cuotaAct = it.filter(Char::isDigit) }, label = { Text("Actual") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(cuotaTot, { cuotaTot = it.filter(Char::isDigit) }, label = { Text("Total") }, modifier = Modifier.weight(1f))
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = {
+                    val m = monto.toDoubleOrNull() ?: 0.0
+                    if (concepto.isNotBlank() && m >= 0) {
+                        onSave(
+                            inicial.copy(
+                                concepto = concepto.trim(),
+                                monto = m,
+                                pagado = pagado,
+                                repetirMesSiguiente = fijo,
+                                montoVariable = variable,
+                                enCuotas = cuotas,
+                                cuotaActual = cuotaAct.toIntOrNull() ?: 1,
+                                cuotaTotal = cuotaTot.toIntOrNull() ?: 1
+                            )
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("Guardar") }
+        }
     }
 }
 
@@ -847,7 +996,7 @@ fun AjustesScreen(settings: Settings, vm: MainViewModel) {
     var nombre by remember(settings) { mutableStateOf(settings.nombre) }
     var sueldo by remember(settings) { mutableStateOf(settings.sueldo.toLong().toString()) }
     var saldo by remember(settings) { mutableStateOf(settings.saldoPrevio.toLong().toString()) }
-    var pin by remember(settings) { mutableStateOf(settings.pin) }
+    var pin by remember(settings) { mutableStateOf("") } // no mostrar hash
     var hora by remember(settings) { mutableStateOf(settings.recordatorioHora) }
     var msg by remember { mutableStateOf<String?>(null) }
     val ctx = LocalContext.current
@@ -953,9 +1102,31 @@ fun AjustesScreen(settings: Settings, vm: MainViewModel) {
             Section("Datos y copias") {
                 Text("Backup cada ${settings.backupCadaDias} días · Último: ${settings.ultimoBackup.ifBlank { "nunca" }}")
                 Button(onClick = {
-                    vm.saveSettings(settings.copy(ultimoBackup = LocalDate.now().toString()))
-                    msg = "Copia marcada (${LocalDate.now()})"
-                }, modifier = Modifier.fillMaxWidth()) { Text("Guardar copia ahora") }
+                    vm.exportBackup { json ->
+                        if (json.startsWith("ERROR:")) {
+                            msg = json
+                        } else {
+                            try {
+                                val file = java.io.File(ctx.cacheDir, "mi-plata-copia.json")
+                                file.writeText(json)
+                                val uri = androidx.core.content.FileProvider.getUriForFile(
+                                    ctx, "${ctx.packageName}.fileprovider", file
+                                )
+                                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = "application/json"
+                                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Mi Plata — copia")
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                ctx.startActivity(android.content.Intent.createChooser(intent, "Guardar copia JSON"))
+                                vm.saveSettings(settings.copy(ultimoBackup = LocalDate.now().toString()))
+                                msg = "Copia lista para guardar o compartir"
+                            } catch (e: Exception) {
+                                msg = "Error al exportar: ${e.message}"
+                            }
+                        }
+                    }
+                }, modifier = Modifier.fillMaxWidth()) { Text("Guardar copia ahora (JSON)") }
                 Button(
                     onClick = { pickJson.launch("application/json") },
                     modifier = Modifier.fillMaxWidth(),
@@ -987,8 +1158,10 @@ fun AjustesScreen(settings: Settings, vm: MainViewModel) {
                     vm.saveSettings(settings.copy(fechaInicio = LocalDate.now().toString(), fechaFin = LocalDate.now().plusDays(29).toString(), saldoPrevio = 0.0))
                 }, modifier = Modifier.fillMaxWidth()) { Text("Nuevo periodo") }
                 OutlinedButton(onClick = {
-                    msg = "Cierre nocturno: congela el día y guarda copia restaurable (lógica lista en modelo DiaEstado)."
-                }, modifier = Modifier.fillMaxWidth()) { Text("Cierre nocturno (info)") }
+                    val hoy = LocalDate.now().toString()
+                    vm.setDiaCerrado(hoy, true)
+                    msg = "Día $hoy marcado como cerrado. El presupuesto queda fijado en el historial del día."
+                }, modifier = Modifier.fillMaxWidth()) { Text("Cerrar el día de hoy") }
             }
         }
 
@@ -1010,12 +1183,17 @@ fun AjustesScreen(settings: Settings, vm: MainViewModel) {
         item {
             Button(
                 onClick = {
+                    val pinToStore = when {
+                        pin.isBlank() -> ""
+                        pin.length in 4..8 && pin.all { it.isDigit() } -> PinHash.hash(pin)
+                        else -> settings.pin // no cambiar si inválido
+                    }
                     vm.saveSettings(
                         settings.copy(
                             nombre = nombre,
                             sueldo = sueldo.toDoubleOrNull() ?: settings.sueldo,
                             saldoPrevio = saldo.toDoubleOrNull() ?: settings.saldoPrevio,
-                            pin = pin
+                            pin = pinToStore
                         )
                     )
                     msg = "Guardado"

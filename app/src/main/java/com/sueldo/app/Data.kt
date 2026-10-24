@@ -1,6 +1,8 @@
 package com.sueldo.app
 
 import android.content.Context
+import java.security.MessageDigest
+
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -16,6 +18,21 @@ object Categorias {
     val GASTO = listOf("Comida", "Transporte", "Super", "Salidas", "Salud", "Otro")
     val INGRESO = listOf("Sueldo", "Freelance", "Alquiler", "Otro ingreso")
 }
+
+object PinHash {
+    fun hash(pin: String): String {
+        if (pin.isBlank()) return ""
+        val dig = MessageDigest.getInstance("SHA-256").digest(pin.toByteArray(Charsets.UTF_8))
+        return dig.joinToString("") { "%02x".format(it) }
+    }
+    /** Acepta PIN en claro (legacy) o hash SHA-256. */
+    fun matches(stored: String, input: String): Boolean {
+        if (stored.isBlank()) return true
+        if (stored == input) return true // legacy texto plano
+        return stored == hash(input)
+    }
+}
+
 
 // ——— Entidades Room ———
 @Entity(tableName = "settings")
@@ -163,6 +180,8 @@ interface GastoDao {
     suspend fun delete(id: Long)
     @Query("DELETE FROM gasto")
     suspend fun deleteAll()
+    @Query("SELECT * FROM gasto ORDER BY fecha DESC")
+    suspend fun listAll(): List<Gasto>
 }
 
 @Dao
@@ -174,6 +193,8 @@ interface GastoImportanteDao {
     @Query("DELETE FROM gasto_importante WHERE id = :id") suspend fun delete(id: Long)
     @Query("SELECT COUNT(*) FROM gasto_importante") suspend fun count(): Int
     @Query("DELETE FROM gasto_importante") suspend fun deleteAll()
+    @Query("SELECT * FROM gasto_importante ORDER BY orden ASC")
+    suspend fun listAll(): List<GastoImportante>
 }
 
 @Dao
@@ -184,6 +205,8 @@ interface IngresoDao {
     @Update suspend fun update(i: Ingreso)
     @Query("DELETE FROM ingreso WHERE id = :id") suspend fun delete(id: Long)
     @Query("DELETE FROM ingreso") suspend fun deleteAll()
+    @Query("SELECT * FROM ingreso ORDER BY orden ASC")
+    suspend fun listAll(): List<Ingreso>
 }
 
 @Dao
@@ -194,6 +217,8 @@ interface CuentaDao {
     @Update suspend fun update(c: Cuenta)
     @Query("DELETE FROM cuenta WHERE id = :id") suspend fun delete(id: Long)
     @Query("DELETE FROM cuenta") suspend fun deleteAll()
+    @Query("SELECT * FROM cuenta ORDER BY orden ASC")
+    suspend fun listAll(): List<Cuenta>
 }
 
 @Dao
@@ -204,6 +229,8 @@ interface MetaDao {
     @Update suspend fun update(m: Meta)
     @Query("DELETE FROM meta WHERE id = :id") suspend fun delete(id: Long)
     @Query("DELETE FROM meta") suspend fun deleteAll()
+    @Query("SELECT * FROM meta ORDER BY id ASC")
+    suspend fun listAll(): List<Meta>
 }
 
 @Dao
@@ -304,17 +331,15 @@ class Repository(private val db: AppDatabase) {
         }
     }
 
-    fun resumenHoyFlow(): Flow<ResumenHoy> = combine(settings, gastos, gastosImportantes, diasEstado) { s, gs, imp, _ ->
-        calcularResumenHoy(s, gs, imp)
+
+    private fun totalIngresos(s: Settings, ingresos: List<Ingreso>): Double {
+        val suma = ingresos.sumOf { it.monto }
+        return if (suma > 0) suma else s.sueldo
     }
 
-    fun diasUiFlow(): Flow<List<DiaUi>> = combine(settings, gastos, gastosImportantes, diasEstado) { s, gs, imp, de ->
-        calcularDias(s, gs, imp, de)
-    }
-
-    private fun calcularBase(s: Settings, imp: List<GastoImportante>): Pair<Double, Int> {
+    private fun calcularBase(s: Settings, imp: List<GastoImportante>, ingresos: List<Ingreso>): Pair<Double, Int> {
         val totalImp = imp.sumOf { it.monto }
-        val disponible = s.sueldo + s.saldoPrevio - totalImp
+        val disponible = totalIngresos(s, ingresos) + s.saldoPrevio - totalImp
         val inicio = LocalDate.parse(s.fechaInicio)
         val fin = LocalDate.parse(s.fechaFin)
         val dias = (ChronoUnit.DAYS.between(inicio, fin) + 1).toInt().coerceAtLeast(1)
@@ -322,51 +347,76 @@ class Repository(private val db: AppDatabase) {
         return base to dias
     }
 
-    private fun calcularResumenHoy(s: Settings, gs: List<Gasto>, imp: List<GastoImportante>): ResumenHoy {
-        val (base, diasTotales) = calcularBase(s, imp)
+    /** Simula el periodo día a día con traspaso siempre (como la app original). */
+    private fun simularDias(
+        s: Settings,
+        gs: List<Gasto>,
+        imp: List<GastoImportante>,
+        ingresos: List<Ingreso>,
+        de: List<DiaEstado> = emptyList()
+    ): List<DiaUi> {
+        val (base, _) = calcularBase(s, imp, ingresos)
         val inicio = LocalDate.parse(s.fechaInicio)
         val fin = LocalDate.parse(s.fechaFin)
         val hoy = LocalDate.now()
-        val gastosPorFecha = gs.groupBy { it.fecha }
-
+        val mapaG = gs.groupBy { it.fecha }
+        val mapaC = de.associateBy { it.fecha }
+        val lista = mutableListOf<DiaUi>()
         var carry = 0.0
         var current = inicio
-        var presupuestoHoy = base
-        var gastadoHoy = 0.0
-        val racha = mutableListOf<Boolean>()
-
         while (!current.isAfter(fin)) {
             val key = current.format(fmt)
-            val gastado = gastosPorFecha[key]?.sumOf { it.monto } ?: 0.0
+            val listaG = mapaG[key] ?: emptyList()
+            // Los negativos del JSON son reintegros: suman al "gastado" neto
+            val gastado = listaG.sumOf { it.monto }
             val presup = base + carry
             val sob = presup - gastado
-            if (current == hoy) {
-                presupuestoHoy = presup
-                gastadoHoy = gastado
-            }
-            if (!current.isAfter(hoy) && gastosPorFecha.containsKey(key)) {
-                racha.add(sob >= 0)
-            }
-            carry = if (gastosPorFecha.containsKey(key) || current.isBefore(hoy)) sob else 0.0
-            // carry only from days that have data or past
-            if (!gastosPorFecha.containsKey(key) && !current.isBefore(hoy)) carry = 0.0
-            // simpler: always pass sobrante if we have gasto registered OR day is past with 0
+            val cerrado = mapaC[key]?.cerrado == true || current.isBefore(hoy)
+            lista.add(
+                DiaUi(
+                    fecha = current,
+                    diaSemana = current.dayOfWeek.getDisplayName(TextStyle.FULL, locale)
+                        .replaceFirstChar { it.uppercase() },
+                    presupuesto = presup,
+                    gastoReal = gastado,
+                    sobrante = sob,
+                    cerrado = cerrado,
+                    esHoy = current == hoy,
+                    gastos = listaG
+                )
+            )
+            // Traspaso siempre al día siguiente (días sin gasto = gastado 0)
+            carry = sob
             current = current.plusDays(1)
+        }
+        return lista
+    }
+
+    fun resumenHoyFlow(): Flow<ResumenHoy> =
+        combine(settings, gastos, gastosImportantes, ingresos) { s, gs, imp, ing ->
+            calcularResumenHoy(s, gs, imp, ing)
         }
 
-        // Recalcular carry correctamente
-        carry = 0.0
-        current = inicio
-        while (current.isBefore(hoy)) {
-            val key = current.format(fmt)
-            val gastado = gastosPorFecha[key]?.sumOf { it.monto } ?: 0.0
-            val presup = base + carry
-            carry = presup - gastado
-            current = current.plusDays(1)
+    fun diasUiFlow(): Flow<List<DiaUi>> =
+        combine(settings, gastos, gastosImportantes, ingresos, diasEstado) { s, gs, imp, ing, de ->
+            simularDias(s, gs, imp, ing, de)
         }
-        presupuestoHoy = base + carry
-        gastadoHoy = gastosPorFecha[hoy.format(fmt)]?.sumOf { it.monto } ?: 0.0
-        val sobranteHoy = presupuestoHoy - gastadoHoy
+
+    private fun calcularResumenHoy(
+        s: Settings,
+        gs: List<Gasto>,
+        imp: List<GastoImportante>,
+        ingresos: List<Ingreso>
+    ): ResumenHoy {
+        val (base, diasTotales) = calcularBase(s, imp, ingresos)
+        val inicio = LocalDate.parse(s.fechaInicio)
+        val fin = LocalDate.parse(s.fechaFin)
+        val hoy = LocalDate.now()
+        val dias = simularDias(s, gs, imp, ingresos)
+        val diaHoy = dias.find { it.esHoy }
+        val presupuestoHoy = diaHoy?.presupuesto ?: base
+        val gastadoHoy = diaHoy?.gastoReal ?: 0.0
+        val sobranteHoy = diaHoy?.sobrante ?: presupuestoHoy
         val manana = base + sobranteHoy
 
         val ratio = if (presupuestoHoy > 0) gastadoHoy / presupuestoHoy else 0.0
@@ -387,11 +437,11 @@ class Repository(private val db: AppDatabase) {
             "Pequeños gastos, grandes resultados."
         )
         val fraseDelDia = frases[(hoy.dayOfYear) % frases.size]
-
         val diasRestantes = ChronoUnit.DAYS.between(hoy, fin).toInt().coerceAtLeast(0)
         val totalImp = imp.sumOf { it.monto }
-        val disponible = s.sueldo + s.saldoPrevio - totalImp
+        val disponible = totalIngresos(s, ingresos) + s.saldoPrevio - totalImp
         val gastadoPeriodo = gs.sumOf { it.monto }
+        val racha = dias.filter { !it.fecha.isAfter(hoy) }.takeLast(14).map { it.sobrante >= 0 }
 
         return ResumenHoy(
             nombre = s.nombre.ifBlank { "vos" },
@@ -407,66 +457,83 @@ class Repository(private val db: AppDatabase) {
             baseCambiaManana = s.ajusteManualDiario != null || s.objetivoPorDia != null,
             totalPeriodoDisponible = disponible,
             quedaPeriodo = disponible - gastadoPeriodo,
-            racha = racha.takeLast(14),
+            racha = racha,
             ocultarMontos = s.ocultarMontos
         )
     }
 
-    private fun calcularDias(
-        s: Settings,
-        gs: List<Gasto>,
-        imp: List<GastoImportante>,
-        de: List<DiaEstado>
-    ): List<DiaUi> {
-        val (base, _) = calcularBase(s, imp)
-        val inicio = LocalDate.parse(s.fechaInicio)
-        val fin = LocalDate.parse(s.fechaFin)
-        val hoy = LocalDate.now()
-        val mapaG = gs.groupBy { it.fecha }
-        val mapaC = de.associateBy { it.fecha }
-        val lista = mutableListOf<DiaUi>()
-        var carry = 0.0
-        var current = inicio
-        while (!current.isAfter(fin)) {
-            val key = current.format(fmt)
-            val listaG = mapaG[key] ?: emptyList()
-            val gastado = listaG.sumOf { it.monto }
-            val presup = base + carry
-            val sob = presup - gastado
-            lista.add(
-                DiaUi(
-                    fecha = current,
-                    diaSemana = current.dayOfWeek.getDisplayName(TextStyle.FULL, locale)
-                        .replaceFirstChar { it.uppercase() },
-                    presupuesto = presup,
-                    gastoReal = gastado,
-                    sobrante = sob,
-                    cerrado = mapaC[key]?.cerrado == true || current.isBefore(hoy),
-                    esHoy = current == hoy,
-                    gastos = listaG
-                )
-            )
-            // carry if day has expenses or is past
-            if (listaG.isNotEmpty() || current.isBefore(hoy)) carry = sob else carry = 0.0
-            current = current.plusDays(1)
+
+    suspend fun exportBackupJson(): String {
+        val s = db.settings().get() ?: Settings()
+        val root = org.json.JSONObject()
+        root.put("sueldo", s.sueldo)
+        root.put("previo", s.saldoPrevio)
+        root.put("start", s.fechaInicio)
+        root.put("end", s.fechaFin)
+        root.put("nombre", s.nombre)
+        root.put("tema", s.tema)
+        root.put("bienvenida", true)
+        s.objetivoPorDia?.let { root.put("objetivo", it) }
+        root.put("upd", System.currentTimeMillis())
+        root.put("ultimaCopia", System.currentTimeMillis())
+
+        val items = org.json.JSONArray()
+        db.gastoImportante().listAll().forEach { g ->
+            items.put(org.json.JSONObject().apply {
+                put("n", g.concepto)
+                put("a", g.monto)
+                put("p", g.pagado)
+                put("v", g.montoVariable)
+                put("f", g.repetirMesSiguiente)
+            })
         }
-        return lista
-    }
+        root.put("items", items)
 
-    suspend fun recalibrar() {
-        val s = db.settings().get().map { it ?: Settings() }
-        // simplified: clear manual adjust so base recalculates from remaining
-        // real logic applied in UI via settings update
-    }
-
-    suspend fun nuevoPeriodo() {
-        val s = (db.settings().get().map { it ?: Settings() }).let {
-            // get current once - use blocking-style via existing
-            Settings()
+        val spent = org.json.JSONArray()
+        db.gasto().listAll().forEach { g ->
+            spent.put(org.json.JSONObject().apply {
+                put("id", g.id)
+                put("date", g.fecha)
+                put("amt", g.monto)
+                put("note", g.detalle)
+                put("cat", g.categoria)
+            })
         }
-        // Keep recurring importantes; archive handled in ViewModel
-    }
+        root.put("spent", spent)
 
+        val ingresos = org.json.JSONArray()
+        db.ingreso().listAll().forEach { i ->
+            ingresos.put(org.json.JSONObject().apply {
+                put("cat", i.concepto)
+                put("a", i.monto)
+            })
+        }
+        root.put("ingresos", ingresos)
+
+        val metas = org.json.JSONArray()
+        db.meta().listAll().forEach { m ->
+            metas.put(org.json.JSONObject().apply {
+                put("n", m.nombre)
+                put("t", m.montoObjetivo)
+                put("g0", m.montoJuntado)
+                put("f", m.fechaObjetivo)
+            })
+        }
+        root.put("metas", metas)
+
+        val cuentas = org.json.JSONArray()
+        db.cuenta().listAll().forEach { c ->
+            cuentas.put(org.json.JSONObject().apply {
+                put("n", c.nombre)
+                put("m", c.saldo)
+            })
+        }
+        root.put("cuentas", cuentas)
+
+        root.put("ajustes", org.json.JSONArray())
+        root.put("cierres", org.json.JSONObject())
+        return root.toString(2)
+    }
 
     suspend fun importBackupJson(json: String): String {
         val root = org.json.JSONObject(json)
